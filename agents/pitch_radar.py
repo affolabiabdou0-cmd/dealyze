@@ -1,13 +1,9 @@
-import os
 import json
 import re
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
+from agents.gemini_client import get_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -205,14 +201,9 @@ class PitchRadarAgent:
     """
 
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise EnvironmentError("GROQ_API_KEY not found in environment")
-        self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = get_gemini_model("gemini-1.5-flash")
 
     def analyze(self, inputs: PitchRadarInput) -> PitchRadarOutput:
-        # Merge user criteria overrides with defaults
         criteria = dict(DEFAULT_CRITERIA)
         if inputs.user_criteria:
             for key, val in inputs.user_criteria.items():
@@ -226,29 +217,17 @@ class PitchRadarAgent:
             radar_id, inputs.startup_name, inputs.language, len(inputs.deck_text),
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _build_system_prompt(criteria, inputs.language)},
-                {"role": "user",   "content": _build_user_prompt(inputs)},
-            ],
-            temperature=0.4,   # lower = more consistent scoring
-            max_tokens=2048,
-        )
-
-        raw    = response.choices[0].message.content
+        prompt = _build_system_prompt(criteria, inputs.language) + "\n\n" + _build_user_prompt(inputs)
+        response = self.model.generate_content(prompt)
+        raw    = response.text
         parsed = _parse_json(raw)
 
-        criterion_scores = _build_criterion_scores(
-            parsed.get("scores", {}), criteria
-        )
+        criterion_scores = _build_criterion_scores(parsed.get("scores", {}), criteria)
         score_global = _weighted_score(parsed.get("scores", {}), criteria)
 
         logger.info(
-            "[PitchRadar] DONE  | id=%s | score=%.1f/10 | recommandation=%s | tokens=%s",
-            radar_id, score_global,
-            parsed.get("recommandation", "N/A"),
-            response.usage.total_tokens if response.usage else "N/A",
+            "[PitchRadar] DONE | id=%s | score=%.1f/10 | recommandation=%s",
+            radar_id, score_global, parsed.get("recommandation", "N/A"),
         )
 
         return PitchRadarOutput(

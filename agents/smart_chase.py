@@ -1,13 +1,9 @@
-import os
 import json
 import re
 import logging
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
+from agents.gemini_client import get_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -239,11 +235,7 @@ class SmartChaseAgent:
     """
 
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise EnvironmentError("GROQ_API_KEY not found in environment")
-        self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = get_gemini_model("gemini-1.5-pro")
 
     def generate(self, inputs: SmartChaseInput) -> SmartChaseOutput:
         inv = inputs.invoice
@@ -259,24 +251,12 @@ class SmartChaseAgent:
             chase_id, inv.client_name, inv.invoice_id, days_overdue, level, tone,
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _build_system_prompt(inputs.language)},
-                {"role": "user",   "content": _build_user_prompt(inputs, days_overdue, level, tone, amount_display)},
-            ],
-            temperature=0.6,
-            max_tokens=1024,
-        )
-
-        raw    = response.choices[0].message.content
+        prompt = _build_system_prompt(inputs.language) + "\n\n" + _build_user_prompt(inputs, days_overdue, level, tone, amount_display)
+        response = self.model.generate_content(prompt)
+        raw    = response.text
         parsed = _parse_json(raw)
 
-        logger.info(
-            "[SmartChase] DONE  | id=%s | level=%d | next_action=%s | tokens=%s",
-            chase_id, level, next_date,
-            response.usage.total_tokens if response.usage else "N/A",
-        )
+        logger.info("[SmartChase] DONE | id=%s | level=%d | next_action=%s", chase_id, level, next_date)
 
         return SmartChaseOutput(
             chase_id=chase_id,

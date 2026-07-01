@@ -4,9 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # AI
-    groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # AI — Gemini (Google AI Studio)
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-1.5-pro"
 
     # Database
     database_url: str = "sqlite:///./dealyze.db"

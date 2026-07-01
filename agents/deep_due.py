@@ -1,13 +1,9 @@
-import os
 import json
 import re
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
+from agents.gemini_client import get_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -226,42 +222,25 @@ class DeepDueAgent:
     """
 
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise EnvironmentError("GROQ_API_KEY not found in environment")
-        self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = get_gemini_model("gemini-1.5-pro")
 
     def analyze(self, inputs: DeepDueInput) -> DeepDueOutput:
         due_id = f"DD2-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         logger.info(
-            "[DeepDue] START | id=%s | company=%s | founder=%s | context_chars=%d | lang=%s",
-            due_id, inputs.company_name, inputs.founder_name or "N/A",
-            len(inputs.context), inputs.language,
+            "[DeepDue] START | id=%s | company=%s | founder=%s | lang=%s",
+            due_id, inputs.company_name, inputs.founder_name or "N/A", inputs.language,
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _build_system_prompt(inputs.language)},
-                {"role": "user",   "content": _build_user_prompt(inputs)},
-            ],
-            temperature=0.3,   # low = more factual, less creative
-            max_tokens=2048,
-        )
-
-        raw    = response.choices[0].message.content
+        prompt = _build_system_prompt(inputs.language) + "\n\n" + _build_user_prompt(inputs)
+        response = self.model.generate_content(prompt)
+        raw    = response.text
         parsed = _parse_json(raw)
 
         score  = float(parsed.get("score_confiance", 5))
         reco   = parsed.get("recommandation_finale", "")
 
-        logger.info(
-            "[DeepDue] DONE  | id=%s | score_confiance=%.1f | recommandation=%s | tokens=%s",
-            due_id, score, reco,
-            response.usage.total_tokens if response.usage else "N/A",
-        )
+        logger.info("[DeepDue] DONE | id=%s | score_confiance=%.1f | recommandation=%s", due_id, score, reco)
 
         return DeepDueOutput(
             due_id=due_id,

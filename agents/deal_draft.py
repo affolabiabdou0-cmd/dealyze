@@ -1,13 +1,9 @@
-import os
 import json
 import re
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
+from agents.gemini_client import get_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -203,17 +199,10 @@ def _parse_json(raw: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 class DealDraftAgent:
-    """
-    Generates professional B2B quotes from 5 user inputs.
-    Uses Groq (llama-3.3-70b-versatile) under the hood.
-    """
+    """Generates professional B2B quotes from 5 user inputs using Gemini."""
 
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise EnvironmentError("GROQ_API_KEY not found in environment")
-        self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = get_gemini_model("gemini-1.5-pro")
 
     def generate(self, inputs: DealDraftInput) -> DealDraftOutput:
         tone = _detect_tone(inputs.sector)
@@ -224,24 +213,12 @@ class DealDraftAgent:
             quote_id, inputs.client_name, inputs.sector, tone, inputs.language,
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _build_system_prompt(tone, inputs.language)},
-                {"role": "user",   "content": _build_user_prompt(inputs, tone)},
-            ],
-            temperature=0.7,
-            max_tokens=2048,
-        )
-
-        raw = response.choices[0].message.content
+        prompt = _build_system_prompt(tone, inputs.language) + "\n\n" + _build_user_prompt(inputs, tone)
+        response = self.model.generate_content(prompt)
+        raw = response.text
         content = _parse_json(raw)
 
-        logger.info(
-            "[DealDraft] DONE  | id=%s | tokens_used=%s",
-            quote_id,
-            response.usage.total_tokens if response.usage else "N/A",
-        )
+        logger.info("[DealDraft] DONE | id=%s", quote_id)
 
         return DealDraftOutput(
             quote_id=quote_id,
