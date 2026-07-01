@@ -1,0 +1,26 @@
+# Environnement — NE JAMAIS COMMITTER
+.env
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Base de données locale
+*.db
+*.sqlite3
+
+# Logs
+logs/
+
+# Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
