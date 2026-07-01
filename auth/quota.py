@@ -14,11 +14,11 @@ from models.database import get_db
 from models.schemas import Chase, DueReport, Quote, RadarReport
 from models.user import User
 
-# -1 = illimité
+# -1 = illimité, 0 = aucun accès
 PLAN_LIMITS: dict[str, dict[str, int]] = {
-    "free_trial": {"deal_draft": 3,  "smart_chase": 3,  "pitch_radar": 1, "deep_due": 1},
-    "starter":    {"deal_draft": 17, "smart_chase": 17, "pitch_radar": 5, "deep_due": 3},
-    "growth":     {"deal_draft": -1, "smart_chase": -1, "pitch_radar": -1, "deep_due": -1},
+    "free_trial": {"deal_draft": 3,  "smart_chase": 5,  "pitch_radar": 2, "deep_due": 1},
+    "starter":    {"deal_draft": 17, "smart_chase": 17, "pitch_radar": 5, "deep_due": 0},
+    "growth":     {"deal_draft": -1, "smart_chase": -1, "pitch_radar": -1, "deep_due": 5},
     "enterprise": {"deal_draft": -1, "smart_chase": -1, "pitch_radar": -1, "deep_due": -1},
 }
 
@@ -64,12 +64,13 @@ def check_quota(agent: str):
 
         if used >= limit:
             plan_nom = plan.replace("_", " ").title()
+            if limit == 0:
+                msg = f"Cet agent n'est pas disponible sur le plan {plan_nom}. Passez au plan supérieur sur /billing/checkout."
+            else:
+                msg = f"Quota atteint pour ce mois ({used}/{limit} sur le plan {plan_nom}). Passez au plan supérieur sur /billing/checkout."
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Quota atteint pour ce mois ({used}/{limit} sur le plan {plan_nom}). "
-                    f"Passez au plan supérieur sur /billing/checkout."
-                ),
+                detail=msg,
             )
         return current_user
 
