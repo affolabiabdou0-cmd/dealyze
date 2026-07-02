@@ -6,6 +6,7 @@ pydantic-settings
 python-jose[cryptography]
 bcrypt
 google-generativeai
+firebase-admin
 httpx
 python-multipart
 pypdf

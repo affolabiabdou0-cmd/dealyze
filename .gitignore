@@ -1,5 +1,8 @@
 # Environnement — NE JAMAIS COMMITTER
 .env
+*service_account*.json
+*firebase*.json
+*credentials*.json
 venv/
 __pycache__/
 *.pyc

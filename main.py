@@ -200,6 +200,52 @@ class ChangePasswordRequest(BaseModel):
     nouveau_mot_de_passe: str = Field(..., min_length=8)
 
 
+class GoogleAuthRequest(BaseModel):
+    firebase_token: str
+    profile: str = "pme"  # "pme" | "investisseur"
+
+
+@app.post("/auth/google", response_model=TokenResponse, tags=["Auth"])
+def google_login(req: GoogleAuthRequest, db: Session = Depends(get_db)):
+    """Connexion / inscription via Google OAuth (Firebase). Le frontend envoie le Firebase ID token."""
+    try:
+        from auth.firebase_client import verify_firebase_token
+        decoded = verify_firebase_token(req.firebase_token)
+    except Exception as e:
+        logger.warning("[Auth] Firebase token invalid: %s", e)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token Firebase invalide ou expiré.")
+
+    email = decoded.get("email")
+    if not email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email manquant dans le token Google.")
+
+    full_name = decoded.get("name") or email.split("@")[0]
+    profile = req.profile if req.profile in ("pme", "investisseur") else "pme"
+
+    user = get_user_by_email(db, email)
+    if not user:
+        user = create_user(
+            db,
+            user_id=str(uuid.uuid4()),
+            email=email,
+            full_name=full_name,
+            hashed_password="google_oauth",
+            profile=profile,
+        )
+        logger.info("[Auth] New Google user registered: %s (%s)", email, profile)
+
+    token = create_access_token(user.id, user.email)
+    logger.info("[Auth] Google login: %s", email)
+    return TokenResponse(
+        access_token=token,
+        user_id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        profile=user.profile,
+        plan=user.plan,
+    )
+
+
 @app.put("/auth/change-password", tags=["Auth"])
 def change_password(
     req: ChangePasswordRequest,
