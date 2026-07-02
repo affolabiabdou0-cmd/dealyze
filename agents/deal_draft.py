@@ -202,7 +202,7 @@ class DealDraftAgent:
     """Generates professional B2B quotes from 5 user inputs using Gemini."""
 
     def __init__(self):
-        self.model = get_gemini_model("gemini-1.5-pro")
+        self.model = get_gemini_model("gemini-2.0-flash")
 
     def generate(self, inputs: DealDraftInput) -> DealDraftOutput:
         tone = _detect_tone(inputs.sector)
