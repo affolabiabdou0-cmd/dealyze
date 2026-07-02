@@ -201,7 +201,7 @@ class PitchRadarAgent:
     """
 
     def __init__(self):
-        self.model = get_gemini_model("gemini-2.0-flash")
+        self.model = get_gemini_model("gemini-2.5-flash")
 
     def analyze(self, inputs: PitchRadarInput) -> PitchRadarOutput:
         criteria = dict(DEFAULT_CRITERIA)

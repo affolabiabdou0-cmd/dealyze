@@ -222,7 +222,7 @@ class DeepDueAgent:
     """
 
     def __init__(self):
-        self.model = get_gemini_model("gemini-2.0-flash")
+        self.model = get_gemini_model("gemini-2.5-flash")
 
     def analyze(self, inputs: DeepDueInput) -> DeepDueOutput:
         due_id = f"DD2-{datetime.now().strftime('%Y%m%d-%H%M%S')}"

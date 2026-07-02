@@ -235,7 +235,7 @@ class SmartChaseAgent:
     """
 
     def __init__(self):
-        self.model = get_gemini_model("gemini-2.0-flash")
+        self.model = get_gemini_model("gemini-2.5-flash")
 
     def generate(self, inputs: SmartChaseInput) -> SmartChaseOutput:
         inv = inputs.invoice
