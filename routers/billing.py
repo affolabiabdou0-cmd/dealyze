@@ -184,7 +184,7 @@ def create_checkout(
         return {
             "mode": "simulation",
             "message": f"✅ Plan {plan['nom']} activé en mode simulation (hackathon)",
-            "checkout_url": f"{settings.app_url}/dashboard?payment=simulated&plan={req.plan}",
+            "checkout_url": f"/dashboard?payment=simulated&plan={req.plan}",
             "simulation_id": sim_id,
             "plan_active": req.plan,
             "montant": f"{plan['prix']} {plan['devise']}/mois",
