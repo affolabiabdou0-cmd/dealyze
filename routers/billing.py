@@ -1,10 +1,6 @@
 """
-Dealyze — Facturation Lemon Squeezy
+VYXEN — Facturation Paddle
 Routes : /billing/*
-
-Deux modes :
-  - SIMULATION_MODE=true  → pas besoin de compte, le paiement est simulé (hackathon)
-  - SIMULATION_MODE=false → appels réels à l'API Lemon Squeezy
 """
 import hashlib
 import hmac
@@ -26,93 +22,57 @@ from models.user import User, get_user_by_id, update_user_subscription
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-LS_API = "https://api.lemonsqueezy.com/v1"
+PADDLE_API = "https://api.paddle.com"
 
-
-# --------------------------------------------------------------------------- #
-# Définition des plans                                                         #
-# --------------------------------------------------------------------------- #
+# ─── Plans ───────────────────────────────────────────────────────────────────
 
 PLANS = {
     "starter": {
-        "nom": "Starter",
-        "prix": 47,
-        "devise": "USD",
-        "variant_id": settings.ls_variant_starter,
+        "nom": "Starter", "prix": 47, "devise": "USD",
+        "price_id": settings.paddle_price_starter,
         "description": "Pour les PME qui démarrent",
-        "fonctionnalites": [
-            "17 devis / mois (Deal Draft)",
-            "17 relances / mois (Smart Chase)",
-            "5 analyses pitch / mois (Pitch Radar)",
-            "3 due diligences / mois (Deep Due)",
-            "Support par email",
-        ],
     },
     "growth": {
-        "nom": "Growth",
-        "prix": 147,
-        "devise": "USD",
-        "variant_id": settings.ls_variant_growth,
+        "nom": "Growth", "prix": 147, "devise": "USD",
+        "price_id": settings.paddle_price_growth,
         "description": "Pour les équipes en croissance",
-        "fonctionnalites": [
-            "Agents illimités",
-            "Export PDF des rapports",
-            "Historique complet",
-            "Support prioritaire",
-            "API access",
-        ],
     },
     "enterprise": {
-        "nom": "Enterprise",
-        "prix": 477,
-        "devise": "USD",
-        "variant_id": settings.ls_variant_enterprise,
+        "nom": "Enterprise", "prix": 477, "devise": "USD",
+        "price_id": settings.paddle_price_enterprise,
         "description": "Pour les fonds et cabinets",
-        "fonctionnalites": [
-            "Tout Growth inclus",
-            "Multi-utilisateurs (5 sièges)",
-            "White-label possible",
-            "SLA garanti",
-            "Onboarding dédié",
-        ],
     },
 }
 
-# Correspondance variant_id → nom du plan (utilisé dans le webhook)
-VARIANT_TO_PLAN: dict[str, str] = {
-    v["variant_id"]: k for k, v in PLANS.items() if v["variant_id"]
-}
 
-
-# --------------------------------------------------------------------------- #
-# Helpers Lemon Squeezy                                                        #
-# --------------------------------------------------------------------------- #
-
-def _ls_headers() -> dict:
+def _paddle_headers() -> dict:
     return {
-        "Authorization": f"Bearer {settings.lemonsqueezy_api_key}",
-        "Accept": "application/vnd.api+json",
-        "Content-Type": "application/vnd.api+json",
+        "Authorization": f"Bearer {settings.paddle_api_key}",
+        "Content-Type": "application/json",
     }
 
 
-def _verify_ls_signature(payload: bytes, signature: str) -> bool:
-    """Vérifie la signature HMAC-SHA256 du webhook Lemon Squeezy."""
-    expected = hmac.new(
-        settings.lemonsqueezy_webhook_secret.encode(),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+def _verify_paddle_signature(payload: bytes, signature_header: str) -> bool:
+    """Vérifie la signature HMAC-SHA256 du webhook Paddle."""
+    try:
+        parts = dict(p.split("=", 1) for p in signature_header.split(";"))
+        ts = parts.get("ts", "")
+        h1 = parts.get("h1", "")
+        signed = f"{ts}:{payload.decode()}"
+        expected = hmac.new(
+            settings.paddle_webhook_secret.encode(),
+            signed.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, h1)
+    except Exception:
+        return False
 
 
-# --------------------------------------------------------------------------- #
-# GET /billing/plans  — public                                                 #
-# --------------------------------------------------------------------------- #
+# ─── GET /billing/plans ───────────────────────────────────────────────────────
 
 @router.get("/plans")
 def list_plans():
-    """Retourne les 3 plans disponibles avec leurs fonctionnalités et prix."""
     return [
         {
             "plan_id": key,
@@ -120,32 +80,26 @@ def list_plans():
             "prix_mensuel": p["prix"],
             "devise": p["devise"],
             "description": p["description"],
-            "fonctionnalites": p["fonctionnalites"],
         }
         for key, p in PLANS.items()
     ]
 
 
-# --------------------------------------------------------------------------- #
-# GET /billing/mode  — public (utile pour le jury)                             #
-# --------------------------------------------------------------------------- #
+# ─── GET /billing/mode ────────────────────────────────────────────────────────
 
 @router.get("/mode")
 def billing_mode():
-    """Indique si le paiement est en mode simulation ou réel."""
     return {
         "mode": "simulation" if settings.simulation_mode else "production",
-        "provider": "Lemon Squeezy" if not settings.simulation_mode else "N/A",
-        "configured": bool(settings.lemonsqueezy_api_key) or settings.simulation_mode,
+        "provider": "Paddle" if not settings.simulation_mode else "N/A",
+        "configured": bool(settings.paddle_api_key) or settings.simulation_mode,
     }
 
 
-# --------------------------------------------------------------------------- #
-# POST /billing/checkout  — protégé                                            #
-# --------------------------------------------------------------------------- #
+# ─── POST /billing/checkout ───────────────────────────────────────────────────
 
 class CheckoutRequest(BaseModel):
-    plan: str  # "starter" | "growth" | "enterprise"
+    plan: str
 
 
 @router.post("/checkout")
@@ -154,22 +108,13 @@ def create_checkout(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Crée une session de paiement.
-    - Mode simulation : retourne une URL simulée et active le plan immédiatement.
-    - Mode production : crée un checkout Lemon Squeezy réel.
-    """
     plan = PLANS.get(req.plan)
     if not plan:
-        raise HTTPException(422, f"Plan inconnu : {req.plan}. Choisir starter, growth ou enterprise.")
+        raise HTTPException(422, f"Plan inconnu : {req.plan}")
 
-    # ------------------------------------------------------------------ #
-    # MODE SIMULATION                                                       #
-    # ------------------------------------------------------------------ #
+    # ── Simulation ────────────────────────────────────────────────────────────
     if settings.simulation_mode:
         sim_id = f"SIM-{uuid.uuid4().hex[:8].upper()}"
-
-        # On active le plan directement en DB (simule le webhook)
         update_user_subscription(
             db, current_user,
             plan=req.plan,
@@ -177,80 +122,35 @@ def create_checkout(
             stripe_subscription_id=sim_id,
             subscription_status="active",
         )
-
-        logger.info("[Billing-SIM] Paiement simulé | user=%s | plan=%s | id=%s",
-                    current_user.email, req.plan, sim_id)
-
+        logger.info("[Billing-SIM] Plan simulé | user=%s | plan=%s", current_user.email, req.plan)
         return {
             "mode": "simulation",
-            "message": f"✅ Plan {plan['nom']} activé en mode simulation (hackathon)",
             "checkout_url": f"/dashboard?payment=simulated&plan={req.plan}",
-            "simulation_id": sim_id,
             "plan_active": req.plan,
-            "montant": f"{plan['prix']} {plan['devise']}/mois",
         }
 
-    # ------------------------------------------------------------------ #
-    # MODE PRODUCTION — Lemon Squeezy                                       #
-    # ------------------------------------------------------------------ #
-    if not settings.lemonsqueezy_api_key:
-        raise HTTPException(503, "Paiement non configuré. Ajouter LEMONSQUEEZY_API_KEY dans .env ou activer SIMULATION_MODE=true.")
+    # ── Production Paddle ─────────────────────────────────────────────────────
+    if not settings.paddle_api_key:
+        raise HTTPException(503, "PADDLE_API_KEY non configuré sur Render.")
 
-    if not plan["variant_id"]:
-        raise HTTPException(503, f"Variant ID Lemon Squeezy manquant pour le plan {req.plan}.")
+    if not plan["price_id"]:
+        raise HTTPException(503, f"PADDLE_PRICE_{req.plan.upper()} non configuré sur Render.")
 
-    payload = {
-        "data": {
-            "type": "checkouts",
-            "attributes": {
-                "checkout_data": {
-                    "email": current_user.email,
-                    "name": current_user.full_name,
-                    "custom": {
-                        "user_id": current_user.id,
-                        "plan": req.plan,
-                    },
-                },
-                "product_options": {
-                    "redirect_url": f"{settings.app_url}/dashboard?payment=success&plan={req.plan}",
-                },
-            },
-            "relationships": {
-                "store": {
-                    "data": {"type": "stores", "id": settings.lemonsqueezy_store_id}
-                },
-                "variant": {
-                    "data": {"type": "variants", "id": plan["variant_id"]}
-                },
-            },
-        }
+    # Retourne le price_id — le frontend ouvre le checkout Paddle.js
+    return {
+        "mode": "production",
+        "price_id": plan["price_id"],
+        "plan": req.plan,
+        "user_id": current_user.id,
+        "user_email": current_user.email,
     }
 
-    try:
-        with httpx.Client(timeout=15) as client:
-            resp = client.post(f"{LS_API}/checkouts", headers=_ls_headers(), json=payload)
-            resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        logger.error("[LemonSqueezy] Checkout error %s: %s", e.response.status_code, e.response.text)
-        raise HTTPException(502, f"Erreur Lemon Squeezy : {e.response.text}")
-    except httpx.RequestError as e:
-        logger.error("[LemonSqueezy] Network error: %s", e)
-        raise HTTPException(502, "Impossible de joindre Lemon Squeezy.")
 
-    data = resp.json()
-    checkout_url = data["data"]["attributes"]["url"]
-    logger.info("[Billing] Checkout LS créé | user=%s | plan=%s", current_user.email, req.plan)
-
-    return {"checkout_url": checkout_url, "mode": "production"}
-
-
-# --------------------------------------------------------------------------- #
-# POST /billing/simulate-upgrade  — protégé (demo jury)                       #
-# --------------------------------------------------------------------------- #
+# ─── POST /billing/simulate-upgrade ──────────────────────────────────────────
 
 class SimulateUpgradeRequest(BaseModel):
     plan: str
-    status: str = "active"  # "active" | "trialing" | "canceled"
+    status: str = "active"
 
 
 @router.post("/simulate-upgrade")
@@ -259,10 +159,6 @@ def simulate_upgrade(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Endpoint de démonstration — permet au jury de changer de plan instantanément
-    sans passer par le paiement. Toujours disponible, même en mode production.
-    """
     if req.plan not in PLANS and req.plan != "free_trial":
         raise HTTPException(422, f"Plan inconnu : {req.plan}")
 
@@ -274,57 +170,36 @@ def simulate_upgrade(
         stripe_subscription_id=sim_id,
         subscription_status=req.status,
     )
-
-    logger.info("[Billing-DEMO] Plan changé | user=%s | plan=%s | statut=%s",
-                current_user.email, req.plan, req.status)
-
-    return {
-        "message": f"Plan changé en {req.plan} (mode démo)",
-        "plan": req.plan,
-        "subscription_status": req.status,
-        "demo_id": sim_id,
-    }
+    return {"message": f"Plan changé en {req.plan}", "plan": req.plan, "status": req.status}
 
 
-# --------------------------------------------------------------------------- #
-# GET /billing/subscription  — protégé                                         #
-# --------------------------------------------------------------------------- #
+# ─── GET /billing/subscription ────────────────────────────────────────────────
 
 @router.get("/subscription")
 def get_subscription(current_user: User = Depends(get_current_user)):
-    """Retourne l'état de l'abonnement de l'utilisateur connecté."""
     plan_info = PLANS.get(current_user.plan)
     return {
         "plan": current_user.plan,
         "plan_nom": plan_info["nom"] if plan_info else "Essai gratuit",
         "subscription_status": current_user.subscription_status,
-        "ls_customer_id": current_user.stripe_customer_id,
-        "ls_subscription_id": current_user.stripe_subscription_id,
+        "paddle_customer_id": current_user.stripe_customer_id,
+        "paddle_subscription_id": current_user.stripe_subscription_id,
     }
 
 
-# --------------------------------------------------------------------------- #
-# POST /billing/webhook  — appelé par Lemon Squeezy                            #
-# --------------------------------------------------------------------------- #
+# ─── POST /billing/webhook ────────────────────────────────────────────────────
 
 @router.post("/webhook")
-async def lemonsqueezy_webhook(
+async def paddle_webhook(
     request: Request,
-    x_signature: str = Header(None, alias="x-signature"),
+    paddle_signature: str = Header(None, alias="paddle-signature"),
     db: Session = Depends(get_db),
 ):
-    """
-    Webhook Lemon Squeezy.
-    Configurer dans le dashboard LS : Settings → Webhooks → Add webhook
-    URL : https://votre-domaine/billing/webhook
-    Événements : subscription_created, subscription_updated, subscription_cancelled
-    """
     payload = await request.body()
 
-    # Vérification signature
-    if settings.lemonsqueezy_webhook_secret and x_signature:
-        if not _verify_ls_signature(payload, x_signature):
-            logger.warning("[LemonSqueezy] Webhook : signature invalide")
+    if settings.paddle_webhook_secret and paddle_signature:
+        if not _verify_paddle_signature(payload, paddle_signature):
+            logger.warning("[Paddle] Webhook : signature invalide")
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Signature invalide.")
 
     try:
@@ -332,52 +207,51 @@ async def lemonsqueezy_webhook(
     except json.JSONDecodeError:
         raise HTTPException(400, "Payload JSON invalide.")
 
-    event_name = event.get("meta", {}).get("event_name", "")
-    custom_data = event.get("meta", {}).get("custom_data", {})
+    event_type = event.get("event_type", "")
+    data = event.get("data", {})
+    custom_data = data.get("custom_data") or {}
     user_id = custom_data.get("user_id")
-    plan = custom_data.get("plan", "starter")
 
-    logger.info("[LemonSqueezy] Webhook reçu : %s | user_id=%s", event_name, user_id)
+    logger.info("[Paddle] Webhook reçu : %s | user_id=%s", event_type, user_id)
 
     if not user_id:
         return {"received": True}
 
     user = get_user_by_id(db, user_id)
     if not user:
-        logger.warning("[LemonSqueezy] Webhook : user_id %s introuvable", user_id)
         return {"received": True}
 
-    attrs = event.get("data", {}).get("attributes", {})
-    sub_status = attrs.get("status", "active")
-    ls_customer_id = str(attrs.get("customer_id", ""))
-    ls_sub_id = str(event.get("data", {}).get("id", ""))
+    if event_type in ("transaction.completed", "subscription.created", "subscription.updated"):
+        # Récupère le plan depuis le price_id
+        items = data.get("items", [])
+        price_id = items[0].get("price", {}).get("id", "") if items else ""
+        plan = "starter"
+        for key, p in PLANS.items():
+            if p["price_id"] == price_id:
+                plan = key
+                break
 
-    # Variant → plan
-    first_item = attrs.get("first_subscription_item", {})
-    variant_id = str(first_item.get("variant_id", ""))
-    if variant_id and variant_id in VARIANT_TO_PLAN:
-        plan = VARIANT_TO_PLAN[variant_id]
+        paddle_customer_id = data.get("customer_id", "")
+        paddle_sub_id = data.get("id", "")
+        sub_status = data.get("status", "active")
 
-    if event_name in ("subscription_created", "subscription_updated", "subscription_payment_success"):
         update_user_subscription(
             db, user,
             plan=plan,
-            stripe_customer_id=ls_customer_id,
-            stripe_subscription_id=ls_sub_id,
+            stripe_customer_id=str(paddle_customer_id),
+            stripe_subscription_id=str(paddle_sub_id),
             subscription_status=sub_status,
         )
-        logger.info("[Billing] Abonnement mis à jour | user=%s | plan=%s | statut=%s",
-                    user.email, plan, sub_status)
+        logger.info("[Billing] Plan activé | user=%s | plan=%s", user.email, plan)
 
-    elif event_name == "subscription_cancelled":
+    elif event_type == "subscription.canceled":
         user.plan = "free_trial"
         user.subscription_status = "canceled"
         db.commit()
         logger.info("[Billing] Abonnement annulé | user=%s", user.email)
 
-    elif event_name == "subscription_payment_failed":
+    elif event_type == "subscription.past_due":
         user.subscription_status = "past_due"
         db.commit()
-        logger.warning("[Billing] Paiement échoué | user=%s", user.email)
 
     return {"received": True}

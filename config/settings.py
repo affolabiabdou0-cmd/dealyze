@@ -16,16 +16,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 h
 
-    # Lemon Squeezy (paiements réels — fonctionne depuis le Bénin)
-    lemonsqueezy_api_key: str = ""
-    lemonsqueezy_store_id: str = ""
-    lemonsqueezy_webhook_secret: str = ""
-    # Variant IDs des 3 plans (créer dans le dashboard Lemon Squeezy)
-    ls_variant_starter: str = ""      # 47 USD/mois
-    ls_variant_growth: str = ""       # 147 USD/mois
-    ls_variant_enterprise: str = ""   # 477 USD/mois
+    # Paddle (paiements réels — international + Afrique)
+    paddle_api_key: str = ""
+    paddle_webhook_secret: str = ""
+    paddle_price_starter: str = ""      # pri_... — 47 USD/mois
+    paddle_price_growth: str = ""       # pri_... — 147 USD/mois
+    paddle_price_enterprise: str = ""   # pri_... — 477 USD/mois
 
-    # Mode simulation (true = pas besoin de compte Lemon Squeezy)
+    # Mode simulation (true = pas besoin de compte Paddle)
     simulation_mode: bool = False
 
     # URL de redirection après paiement
