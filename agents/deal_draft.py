@@ -116,7 +116,7 @@ _JSON_SCHEMA_EN = """{
 
 def _build_system_prompt(tone: str, language: str) -> str:
     if language == "fr":
-        return f"""Tu es Deal Draft, l'agent IA de Dealyze. Tu génères des devis et propositions commerciales professionnels, convaincants et personnalisés.
+        return f"""Tu es Deal Draft, l'agent IA de VYXEN. Tu génères des devis et propositions commerciales professionnels, convaincants et personnalisés.
 
 TON : {_TONE_LABELS_FR.get(tone, _TONE_LABELS_FR['professionnel'])}
 
@@ -130,7 +130,7 @@ RÈGLES ABSOLUES :
 FORMAT DE SORTIE :
 {_JSON_SCHEMA}"""
     else:
-        return f"""You are Deal Draft, Dealyze's AI agent. You generate professional, convincing, personalized quotes and commercial proposals.
+        return f"""You are Deal Draft, VYXEN's AI agent. You generate professional, convincing, personalized quotes and commercial proposals.
 
 TONE: {_TONE_LABELS_EN.get(tone, _TONE_LABELS_EN['professionnel'])}
 

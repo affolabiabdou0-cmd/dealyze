@@ -24,6 +24,7 @@ class User(Base):
     stripe_subscription_id = Column(String, nullable=True)
     subscription_status    = Column(String, default="trialing")
     # "trialing" | "active" | "past_due" | "canceled" | "unpaid"
+    current_period_end     = Column(DateTime, nullable=True)  # fin du cycle de facturation Paddle en cours
 
 
 # --------------------------------------------------------------------------- #
@@ -70,11 +71,14 @@ def update_user_subscription(
     stripe_customer_id: str,
     stripe_subscription_id: str,
     subscription_status: str,
+    current_period_end: datetime | None = None,
 ) -> User:
     user.plan = plan
     user.stripe_customer_id = stripe_customer_id
     user.stripe_subscription_id = stripe_subscription_id
     user.subscription_status = subscription_status
+    if current_period_end is not None:
+        user.current_period_end = current_period_end
     db.commit()
     db.refresh(user)
     return user

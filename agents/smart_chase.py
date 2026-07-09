@@ -27,7 +27,7 @@ class InvoiceData:
 @dataclass
 class SmartChaseInput:
     invoice: InvoiceData
-    company_name: str        # PME using Dealyze
+    company_name: str        # PME using VYXEN
     chase_style: str = "professionnel"   # "bienveillant" | "professionnel" | "ferme"
     language: str = "fr"
 
@@ -130,7 +130,7 @@ _LEVEL_CTX_EN = {
 
 def _build_system_prompt(language: str) -> str:
     if language == "fr":
-        return """Tu es Smart Chase, l'agent IA de Dealyze. Tu rédiges des emails de relance impayée professionnels, humains et efficaces.
+        return """Tu es Smart Chase, l'agent IA de VYXEN. Tu rédiges des emails de relance impayée professionnels, humains et efficaces.
 
 RÈGLES ABSOLUES :
 — Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après
@@ -146,7 +146,7 @@ FORMAT DE SORTIE :
   "corps": "Corps complet de l'email avec sauts de ligne \\n entre les paragraphes"
 }"""
     else:
-        return """You are Smart Chase, Dealyze's AI agent. You write professional, human, and effective payment reminder emails.
+        return """You are Smart Chase, VYXEN's AI agent. You write professional, human, and effective payment reminder emails.
 
 ABSOLUTE RULES:
 — Reply ONLY with a valid JSON object, no text before or after

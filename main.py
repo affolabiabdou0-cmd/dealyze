@@ -1,5 +1,5 @@
 """
-Dealyze — FastAPI Backend
+VYXEN — FastAPI Backend
 Entry point: uvicorn main:app --reload
 """
 import uuid
@@ -42,13 +42,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_tables()
-    logger.info("Dealyze API v%s — starting up [%s]", settings.app_version, settings.app_env)
+    logger.info("VYXEN API v%s — starting up [%s]", settings.app_version, settings.app_env)
     yield
-    logger.info("Dealyze API — shutting down")
+    logger.info("VYXEN API — shutting down")
 
 
 app = FastAPI(
-    title="Dealyze API",
+    title="VYXEN API",
     description="Turn every deal into done. — AI agents for SMBs and investors.",
     version=settings.app_version,
     lifespan=lifespan,
@@ -93,6 +93,7 @@ class TokenResponse(BaseModel):
     full_name:    str
     profile:      str
     plan:         str
+    created_at:   str
 
 
 class UserMeResponse(BaseModel):
@@ -132,6 +133,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         full_name=user.full_name,
         profile=user.profile,
         plan=user.plan,
+        created_at=user.created_at.isoformat(),
     )
 
 
@@ -154,6 +156,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         full_name=user.full_name,
         profile=user.profile,
         plan=user.plan,
+        created_at=user.created_at.isoformat(),
     )
 
 
@@ -243,6 +246,7 @@ def google_login(req: GoogleAuthRequest, db: Session = Depends(get_db)):
         full_name=user.full_name,
         profile=user.profile,
         plan=user.plan,
+        created_at=user.created_at.isoformat(),
     )
 
 

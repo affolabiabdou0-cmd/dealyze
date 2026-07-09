@@ -7,7 +7,7 @@ import hmac
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -121,11 +121,12 @@ def create_checkout(
             stripe_customer_id=f"sim_cust_{current_user.id[:8]}",
             stripe_subscription_id=sim_id,
             subscription_status="active",
+            current_period_end=datetime.utcnow() + timedelta(days=30),
         )
         logger.info("[Billing-SIM] Plan simulé | user=%s | plan=%s", current_user.email, req.plan)
         return {
             "mode": "simulation",
-            "checkout_url": f"/dashboard?payment=simulated&plan={req.plan}",
+            "checkout_url": f"/dashboard/billing?payment=simulated&plan={req.plan}",
             "plan_active": req.plan,
         }
 
@@ -184,7 +185,43 @@ def get_subscription(current_user: User = Depends(get_current_user)):
         "subscription_status": current_user.subscription_status,
         "paddle_customer_id": current_user.stripe_customer_id,
         "paddle_subscription_id": current_user.stripe_subscription_id,
+        "current_period_end": current_user.current_period_end.isoformat() if current_user.current_period_end else None,
     }
+
+
+# ─── GET /billing/invoices ────────────────────────────────────────────────────
+
+@router.get("/invoices")
+async def list_invoices(current_user: User = Depends(get_current_user)):
+    """Historique réel des paiements, lu directement depuis Paddle (aucune donnée locale)."""
+    if settings.simulation_mode or not settings.paddle_api_key or not current_user.stripe_customer_id:
+        return []
+
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.get(
+                f"{PADDLE_API}/transactions",
+                headers=_paddle_headers(),
+                params={"customer_id": current_user.stripe_customer_id, "status": "completed", "per_page": 20},
+                timeout=10,
+            )
+            res.raise_for_status()
+        except httpx.HTTPError:
+            logger.warning("[Paddle] Échec de récupération de l'historique | user=%s", current_user.email)
+            return []
+
+    transactions = res.json().get("data", [])
+    return [
+        {
+            "id": t.get("id"),
+            "date": t.get("created_at"),
+            "montant": (t.get("details") or {}).get("totals", {}).get("grand_total"),
+            "devise": t.get("currency_code"),
+            "statut": t.get("status"),
+            "invoice_id": t.get("invoice_id"),
+        }
+        for t in transactions
+    ]
 
 
 # ─── POST /billing/webhook ────────────────────────────────────────────────────
@@ -197,10 +234,15 @@ async def paddle_webhook(
 ):
     payload = await request.body()
 
-    if settings.paddle_webhook_secret and paddle_signature:
-        if not _verify_paddle_signature(payload, paddle_signature):
-            logger.warning("[Paddle] Webhook : signature invalide")
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Signature invalide.")
+    # Fail closed : sans secret configuré ou sans signature valide, on rejette.
+    # Un webhook non authentifié pourrait sinon activer un abonnement payant sans paiement réel.
+    if not settings.paddle_webhook_secret:
+        logger.error("[Paddle] Webhook reçu mais PADDLE_WEBHOOK_SECRET non configuré — rejeté.")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Webhook non configuré.")
+
+    if not paddle_signature or not _verify_paddle_signature(payload, paddle_signature):
+        logger.warning("[Paddle] Webhook : signature invalide ou absente")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Signature invalide.")
 
     try:
         event = json.loads(payload)
@@ -235,12 +277,21 @@ async def paddle_webhook(
         paddle_sub_id = data.get("id", "")
         sub_status = data.get("status", "active")
 
+        period_end = None
+        ends_at = (data.get("current_billing_period") or {}).get("ends_at")
+        if ends_at:
+            try:
+                period_end = datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                period_end = None
+
         update_user_subscription(
             db, user,
             plan=plan,
             stripe_customer_id=str(paddle_customer_id),
             stripe_subscription_id=str(paddle_sub_id),
             subscription_status=sub_status,
+            current_period_end=period_end,
         )
         logger.info("[Billing] Plan activé | user=%s | plan=%s", user.email, plan)
 

@@ -3,7 +3,7 @@ Vérification des quotas par plan.
 Injecté comme dépendance FastAPI dans chaque route agent.
 """
 from calendar import monthrange
-from datetime import date
+from datetime import date, datetime
 from functools import partial
 
 from fastapi import Depends, HTTPException, status
@@ -21,6 +21,14 @@ PLAN_LIMITS: dict[str, dict[str, int]] = {
     "growth":     {"deal_draft": -1, "smart_chase": -1, "pitch_radar": -1, "deep_due": 5},
     "enterprise": {"deal_draft": -1, "smart_chase": -1, "pitch_radar": -1, "deep_due": -1},
 }
+
+TRIAL_DURATION_DAYS = 14
+
+
+def trial_days_remaining(created_at: datetime) -> int:
+    """Jours restants sur l'essai gratuit de 14 jours (0 si expiré)."""
+    elapsed = (datetime.utcnow() - created_at).days
+    return max(0, TRIAL_DURATION_DAYS - elapsed)
 
 AGENT_TABLE = {
     "deal_draft":  Quote,
@@ -45,6 +53,13 @@ def check_quota(agent: str):
         db: Session = Depends(get_db),
     ) -> User:
         plan = current_user.plan
+
+        if plan == "free_trial" and trial_days_remaining(current_user.created_at) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Votre essai gratuit de 14 jours est terminé. Passez à un plan payant sur /billing/checkout pour continuer.",
+            )
+
         limit = PLAN_LIMITS.get(plan, PLAN_LIMITS["free_trial"]).get(agent, 0)
 
         if limit == -1:

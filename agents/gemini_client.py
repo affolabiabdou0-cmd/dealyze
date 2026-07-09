@@ -1,4 +1,4 @@
-"""Shared Gemini client for all Dealyze agents."""
+"""Shared Gemini client for all VYXEN agents."""
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv

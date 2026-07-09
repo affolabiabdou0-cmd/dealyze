@@ -31,3 +31,17 @@ def create_tables():
     from models import schemas  # noqa: F401
     from models import user     # noqa: F401
     Base.metadata.create_all(bind=engine)
+    _run_lightweight_migrations()
+
+
+def _run_lightweight_migrations():
+    """Add columns to already-existing tables (no Alembic in this project)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    existing_cols = {c["name"] for c in inspector.get_columns("users")}
+    if "current_period_end" not in existing_cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN current_period_end TIMESTAMP"))

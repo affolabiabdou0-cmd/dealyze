@@ -2,7 +2,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore" : des variables d'environnement obsolètes ou inconnues (ex. anciennes
+    # clés Lemon Squeezy avant la migration vers Paddle) ne doivent jamais empêcher le
+    # démarrage de l'application.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # AI — Gemini (Google AI Studio)
     gemini_api_key: str = ""

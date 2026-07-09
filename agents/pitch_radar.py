@@ -88,7 +88,7 @@ def _build_system_prompt(criteria: dict, language: str) -> str:
     criteria_block = _build_criteria_block(criteria, language)
 
     if language == "fr":
-        return f"""Tu es Pitch Radar, l'agent IA de Dealyze. Tu analyses des pitch decks et produis des rapports d'investissement structurés.
+        return f"""Tu es Pitch Radar, l'agent IA de VYXEN. Tu analyses des pitch decks et produis des rapports d'investissement structurés.
 
 GRILLE DE NOTATION (scores de 0 à 10) :
 {criteria_block}
@@ -113,7 +113,7 @@ FORMAT DE SORTIE :
 }}"""
 
     else:
-        return f"""You are Pitch Radar, Dealyze's AI agent. You analyze pitch decks and produce structured investment reports.
+        return f"""You are Pitch Radar, VYXEN's AI agent. You analyze pitch decks and produce structured investment reports.
 
 SCORING GRID (scores 0 to 10):
 {criteria_block}
