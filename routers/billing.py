@@ -277,6 +277,17 @@ async def paddle_webhook(
         paddle_sub_id = data.get("id", "")
         sub_status = data.get("status", "active")
 
+        # Si le prix Paddle a une période d'essai, une souscription "trialing" est créée
+        # sans qu'aucun paiement n'ait encore eu lieu. On ne doit jamais donner l'accès au
+        # plan payant tant que Paddle n'a pas confirmé un statut réellement actif/payé —
+        # sinon n'importe quel prix mal configuré avec essai donnerait l'accès gratuitement.
+        if sub_status != "active":
+            logger.info(
+                "[Billing] Souscription reçue mais statut '%s' (pas encore payé) — accès non accordé | user=%s | plan=%s",
+                sub_status, user.email, plan,
+            )
+            return {"received": True}
+
         period_end = None
         ends_at = (data.get("current_billing_period") or {}).get("ends_at")
         if ends_at:
