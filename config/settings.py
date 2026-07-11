@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from: str = "VYXEN <no-reply@vyxen.app>"
+    smtp_from: str = "VYXEN <onboarding@resend.dev>"  # adresse de test Resend tant qu'aucun domaine n'est vérifié
 
     # App
     app_env: str = "development"
