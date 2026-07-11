@@ -390,13 +390,17 @@ def resend_verification(
 ):
     """Renvoie l'email de vérification pour le compte connecté."""
     if current_user.email_verified:
-        return {"message": "Cet email est déjà vérifié."}
+        return {"message": "Cet email est déjà vérifié.", "sent": False, "already_verified": True}
     current_user.verification_token = secrets.token_urlsafe(32)
     current_user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
     db.commit()
     verify_link = f"{settings.app_url}/verify-email?token={current_user.verification_token}"
     sent = send_verification_email(current_user.email, current_user.full_name, verify_link)
-    return {"message": "Email de vérification renvoyé." if sent else "Email non configuré côté serveur — contactez le support."}
+    return {
+        "message": "Email de vérification renvoyé." if sent else "L'envoi d'emails n'est pas encore configuré côté serveur.",
+        "sent": sent,
+        "already_verified": False,
+    }
 
 
 @app.get("/auth/quota", tags=["Auth"])
