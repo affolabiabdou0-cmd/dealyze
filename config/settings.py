@@ -29,8 +29,17 @@ class Settings(BaseSettings):
     # Mode simulation (true = pas besoin de compte Paddle)
     simulation_mode: bool = False
 
-    # URL de redirection après paiement
+    # URL de redirection après paiement / liens dans les emails
     app_url: str = "http://localhost:3000"
+
+    # Email transactionnel (mot de passe oublié, vérification de compte)
+    # Si smtp_host est vide, les emails ne sont pas envoyés : le lien est seulement loggé
+    # (utile en dev, ne bloque jamais le reste de l'app).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "VYXEN <no-reply@vyxen.app>"
 
     # App
     app_env: str = "development"

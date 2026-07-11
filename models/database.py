@@ -34,6 +34,18 @@ def create_tables():
     _run_lightweight_migrations()
 
 
+_USERS_COLUMNS_TO_ENSURE = [
+    ("current_period_end",  "TIMESTAMP"),
+    ("email_verified",      "BOOLEAN DEFAULT FALSE"),
+    ("verification_token",  "VARCHAR"),
+    ("verification_expires", "TIMESTAMP"),
+    ("reset_token",          "VARCHAR"),
+    ("reset_token_expires",  "TIMESTAMP"),
+    ("failed_login_attempts", "INTEGER DEFAULT 0"),
+    ("locked_until",          "TIMESTAMP"),
+]
+
+
 def _run_lightweight_migrations():
     """Add columns to already-existing tables (no Alembic in this project)."""
     from sqlalchemy import inspect, text
@@ -42,6 +54,7 @@ def _run_lightweight_migrations():
     if "users" not in inspector.get_table_names():
         return
     existing_cols = {c["name"] for c in inspector.get_columns("users")}
-    if "current_period_end" not in existing_cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN current_period_end TIMESTAMP"))
+    for col_name, col_type in _USERS_COLUMNS_TO_ENSURE:
+        if col_name not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))

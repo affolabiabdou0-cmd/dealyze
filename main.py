@@ -2,9 +2,10 @@
 VYXEN — FastAPI Backend
 Entry point: uvicorn main:app --reload
 """
+import secrets
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,8 +22,12 @@ from models.schemas import (
     Chase, DueReport, Quote, RadarReport,
     save_chase, save_due, save_quote, save_radar,
 )
-from models.user import User, create_user, get_user_by_email
+from models.user import (
+    User, create_user, delete_user, get_user_by_email,
+    get_user_by_reset_token, get_user_by_verification_token,
+)
 from routers.billing import router as billing_router
+from utils.email import send_password_reset_email, send_verification_email
 from utils.logger import setup_logging
 from utils.pdf_reader import extract_text
 from agents.deal_draft import DealDraftAgent, DealDraftInput
@@ -97,12 +102,19 @@ class TokenResponse(BaseModel):
 
 
 class UserMeResponse(BaseModel):
-    user_id:    str
-    email:      str
-    full_name:  str
-    profile:    str
-    plan:       str
-    created_at: str
+    user_id:        str
+    email:          str
+    full_name:      str
+    profile:        str
+    plan:           str
+    created_at:     str
+    email_verified: bool = False
+
+
+MAX_FAILED_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+VERIFICATION_TOKEN_HOURS = 24
+RESET_TOKEN_HOURS = 1
 
 
 @app.post("/auth/register", response_model=TokenResponse, tags=["Auth"])
@@ -124,6 +136,18 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         hashed_password=hash_password(req.password),
         profile=req.profile,
     )
+
+    # Best-effort : l'envoi de l'email de vérification ne doit jamais faire échouer
+    # l'inscription (SMTP peut ne pas être configuré).
+    try:
+        user.verification_token = secrets.token_urlsafe(32)
+        user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
+        db.commit()
+        verify_link = f"{settings.app_url}/verify-email?token={user.verification_token}"
+        send_verification_email(user.email, user.full_name, verify_link)
+    except Exception as e:
+        logger.warning("[Auth] Envoi de l'email de vérification échoué pour %s : %s", user.email, e)
+
     token = create_access_token(user.id, user.email)
     logger.info("[Auth] New user registered: %s (%s)", user.email, user.profile)
     return TokenResponse(
@@ -141,11 +165,29 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     """Login with email + password. Returns a JWT access token."""
     user = get_user_by_email(db, req.email)
+
+    if user and user.locked_until and user.locked_until > datetime.utcnow():
+        minutes_left = max(1, int((user.locked_until - datetime.utcnow()).total_seconds() // 60) + 1)
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Trop de tentatives échouées. Réessayez dans {minutes_left} minute(s).",
+        )
+
     if not user or not verify_password(req.password, user.hashed_password):
+        if user:
+            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            if user.failed_login_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+                user.locked_until = datetime.utcnow() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+                logger.warning("[Auth] Compte verrouillé après échecs répétés : %s", user.email)
+            db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Email ou mot de passe incorrect.")
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Compte désactivé.")
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
 
     token = create_access_token(user.id, user.email)
     logger.info("[Auth] Login: %s", user.email)
@@ -170,7 +212,24 @@ def me(current_user: User = Depends(get_current_user)):
         profile=current_user.profile,
         plan=current_user.plan,
         created_at=current_user.created_at.isoformat(),
+        email_verified=bool(current_user.email_verified),
     )
+
+
+@app.delete("/auth/me", tags=["Auth"])
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Supprime définitivement le compte et tout son contenu généré."""
+    if current_user.stripe_subscription_id and not current_user.stripe_subscription_id.startswith(("sim_", "demo_", "SIM-", "DEMO-")):
+        from routers.billing import cancel_paddle_subscription
+        cancel_paddle_subscription(current_user.stripe_subscription_id)
+
+    email = current_user.email
+    delete_user(db, current_user)
+    logger.info("[Auth] Compte supprimé : %s", email)
+    return {"message": "Compte supprimé définitivement."}
 
 
 class UpdateProfileRequest(BaseModel):
@@ -195,6 +254,7 @@ def update_profile(
         user_id=current_user.id, email=current_user.email,
         full_name=current_user.full_name, profile=current_user.profile,
         plan=current_user.plan, created_at=current_user.created_at.isoformat(),
+        email_verified=bool(current_user.email_verified),
     )
 
 
@@ -262,6 +322,81 @@ def change_password(
     current_user.hashed_password = hash_password(req.nouveau_mot_de_passe)
     db.commit()
     return {"message": "Mot de passe modifié avec succès."}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+@app.post("/auth/forgot-password", tags=["Auth"])
+def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Envoie un lien de réinitialisation par email si le compte existe."""
+    user = get_user_by_email(db, req.email)
+    if user:
+        user.reset_token = secrets.token_urlsafe(32)
+        user.reset_token_expires = datetime.utcnow() + timedelta(hours=RESET_TOKEN_HOURS)
+        db.commit()
+        reset_link = f"{settings.app_url}/reset-password?token={user.reset_token}"
+        try:
+            send_password_reset_email(user.email, user.full_name, reset_link)
+        except Exception as e:
+            logger.warning("[Auth] Envoi de l'email de réinitialisation échoué pour %s : %s", user.email, e)
+        logger.info("[Auth] Demande de réinitialisation : %s", user.email)
+
+    # Réponse identique que le compte existe ou non — ne révèle jamais quels emails sont enregistrés.
+    return {"message": "Si un compte existe avec cet email, un lien de réinitialisation vient d'être envoyé."}
+
+
+class ResetPasswordRequest(BaseModel):
+    token:        str
+    new_password: str = Field(..., min_length=8)
+
+
+@app.post("/auth/reset-password", tags=["Auth"])
+def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Définit un nouveau mot de passe à partir d'un lien reçu par email."""
+    user = get_user_by_reset_token(db, req.token)
+    if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Lien invalide ou expiré. Refaites une demande.")
+
+    user.hashed_password = hash_password(req.new_password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
+    logger.info("[Auth] Mot de passe réinitialisé : %s", user.email)
+    return {"message": "Mot de passe mis à jour. Vous pouvez vous connecter."}
+
+
+@app.get("/auth/verify-email", tags=["Auth"])
+def verify_email(token: str, db: Session = Depends(get_db)):
+    """Confirme l'adresse email à partir du lien reçu à l'inscription."""
+    user = get_user_by_verification_token(db, token)
+    if not user or not user.verification_expires or user.verification_expires < datetime.utcnow():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Lien de vérification invalide ou expiré.")
+    user.email_verified = True
+    user.verification_token = None
+    user.verification_expires = None
+    db.commit()
+    logger.info("[Auth] Email vérifié : %s", user.email)
+    return {"message": "Email vérifié avec succès."}
+
+
+@app.post("/auth/resend-verification", tags=["Auth"])
+def resend_verification(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Renvoie l'email de vérification pour le compte connecté."""
+    if current_user.email_verified:
+        return {"message": "Cet email est déjà vérifié."}
+    current_user.verification_token = secrets.token_urlsafe(32)
+    current_user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
+    db.commit()
+    verify_link = f"{settings.app_url}/verify-email?token={current_user.verification_token}"
+    sent = send_verification_email(current_user.email, current_user.full_name, verify_link)
+    return {"message": "Email de vérification renvoyé." if sent else "Email non configuré côté serveur — contactez le support."}
 
 
 @app.get("/auth/quota", tags=["Auth"])

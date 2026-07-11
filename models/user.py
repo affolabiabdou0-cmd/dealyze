@@ -1,7 +1,7 @@
 """User ORM model + CRUD helpers."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.orm import Session
 
 from models.database import Base
@@ -26,6 +26,15 @@ class User(Base):
     # "trialing" | "active" | "past_due" | "canceled" | "unpaid"
     current_period_end     = Column(DateTime, nullable=True)  # fin du cycle de facturation Paddle en cours
 
+    # Sécurité du compte
+    email_verified          = Column(Boolean, default=False)
+    verification_token      = Column(String, nullable=True, index=True)
+    verification_expires    = Column(DateTime, nullable=True)
+    reset_token              = Column(String, nullable=True, index=True)
+    reset_token_expires      = Column(DateTime, nullable=True)
+    failed_login_attempts    = Column(Integer, default=0)
+    locked_until              = Column(DateTime, nullable=True)
+
 
 # --------------------------------------------------------------------------- #
 # CRUD                                                                         #
@@ -41,6 +50,14 @@ def get_user_by_id(db: Session, user_id: str) -> User | None:
 
 def get_user_by_stripe_customer(db: Session, customer_id: str) -> User | None:
     return db.query(User).filter(User.stripe_customer_id == customer_id).first()
+
+
+def get_user_by_verification_token(db: Session, token: str) -> User | None:
+    return db.query(User).filter(User.verification_token == token).first()
+
+
+def get_user_by_reset_token(db: Session, token: str) -> User | None:
+    return db.query(User).filter(User.reset_token == token).first()
 
 
 def create_user(
@@ -82,3 +99,15 @@ def update_user_subscription(
     db.commit()
     db.refresh(user)
     return user
+
+
+def delete_user(db: Session, user: User) -> None:
+    """Supprime définitivement le compte et tout son contenu généré."""
+    from models.schemas import Chase, DueReport, Quote, RadarReport
+
+    db.query(Quote).filter(Quote.user_id == user.id).delete()
+    db.query(Chase).filter(Chase.user_id == user.id).delete()
+    db.query(RadarReport).filter(RadarReport.user_id == user.id).delete()
+    db.query(DueReport).filter(DueReport.user_id == user.id).delete()
+    db.delete(user)
+    db.commit()

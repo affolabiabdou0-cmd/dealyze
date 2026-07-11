@@ -52,6 +52,26 @@ def _paddle_headers() -> dict:
     }
 
 
+def cancel_paddle_subscription(subscription_id: str) -> bool:
+    """Annule un abonnement Paddle actif — appelé en best-effort avant de supprimer un compte
+    pour ne pas continuer à facturer quelqu'un qui n'a plus de compte VYXEN."""
+    if settings.simulation_mode or not settings.paddle_api_key:
+        return False
+    try:
+        res = httpx.post(
+            f"{PADDLE_API}/subscriptions/{subscription_id}/cancel",
+            headers=_paddle_headers(),
+            json={"effective_from": "immediately"},
+            timeout=10,
+        )
+        res.raise_for_status()
+        logger.info("[Paddle] Abonnement annulé suite à suppression de compte : %s", subscription_id)
+        return True
+    except httpx.HTTPError as e:
+        logger.error("[Paddle] Échec d'annulation de l'abonnement %s : %s", subscription_id, e)
+        return False
+
+
 def _verify_paddle_signature(payload: bytes, signature_header: str) -> bool:
     """Vérifie la signature HMAC-SHA256 du webhook Paddle."""
     try:
@@ -222,6 +242,47 @@ async def list_invoices(current_user: User = Depends(get_current_user)):
         }
         for t in transactions
     ]
+
+
+# ─── GET /billing/invoices/{transaction_id}/pdf ───────────────────────────────
+
+@router.get("/invoices/{transaction_id}/pdf")
+async def get_invoice_pdf(transaction_id: str, current_user: User = Depends(get_current_user)):
+    """Renvoie l'URL signée du PDF de facture pour une transaction du compte connecté."""
+    if settings.simulation_mode or not settings.paddle_api_key or not current_user.stripe_customer_id:
+        raise HTTPException(503, "Facturation non disponible en mode simulation.")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            tx_res = await client.get(
+                f"{PADDLE_API}/transactions/{transaction_id}",
+                headers=_paddle_headers(),
+                timeout=10,
+            )
+            tx_res.raise_for_status()
+        except httpx.HTTPError:
+            raise HTTPException(404, "Facture introuvable.")
+
+        # Vérifie que cette transaction appartient bien à l'utilisateur connecté — sans ça,
+        # n'importe quel compte pourrait lire la facture de n'importe qui d'autre en devinant un ID.
+        tx_customer_id = (tx_res.json().get("data") or {}).get("customer_id")
+        if tx_customer_id != current_user.stripe_customer_id:
+            raise HTTPException(404, "Facture introuvable.")
+
+        try:
+            res = await client.get(
+                f"{PADDLE_API}/transactions/{transaction_id}/invoice",
+                headers=_paddle_headers(),
+                timeout=10,
+            )
+            res.raise_for_status()
+        except httpx.HTTPError:
+            raise HTTPException(404, "Facture introuvable.")
+
+    url = (res.json().get("data") or {}).get("url")
+    if not url:
+        raise HTTPException(404, "Facture introuvable.")
+    return {"url": url}
 
 
 # ─── POST /billing/webhook ────────────────────────────────────────────────────
