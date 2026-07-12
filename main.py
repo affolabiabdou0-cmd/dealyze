@@ -47,6 +47,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_tables()
+
+    # Firebase Admin (Google login) used to initialize lazily on the first /auth/google
+    # call — parsing the service account credentials and fetching Google's signing certs
+    # inside that request added avoidable latency on top of Render's own cold start,
+    # which is what made Google sign-in feel unusually slow. Warm it up here instead.
+    try:
+        from auth.firebase_client import _get_app
+        _get_app()
+        logger.info("[Startup] Firebase Admin initialisé.")
+    except Exception as e:
+        logger.warning("[Startup] Firebase Admin non initialisé (Google login indisponible) : %s", e)
+
     logger.info("VYXEN API v%s — starting up [%s]", settings.app_version, settings.app_env)
     yield
     logger.info("VYXEN API — shutting down")
