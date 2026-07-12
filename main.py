@@ -7,7 +7,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
@@ -118,7 +118,7 @@ RESET_TOKEN_HOURS = 1
 
 
 @app.post("/auth/register", response_model=TokenResponse, tags=["Auth"])
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
+def register(req: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Create a new account. Returns a JWT access token immediately."""
     if get_user_by_email(db, req.email):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email déjà utilisé.")
@@ -137,16 +137,13 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         profile=req.profile,
     )
 
-    # Best-effort : l'envoi de l'email de vérification ne doit jamais faire échouer
-    # l'inscription (SMTP peut ne pas être configuré).
-    try:
-        user.verification_token = secrets.token_urlsafe(32)
-        user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
-        db.commit()
-        verify_link = f"{settings.app_url}/verify-email?token={user.verification_token}"
-        send_verification_email(user.email, user.full_name, verify_link)
-    except Exception as e:
-        logger.warning("[Auth] Envoi de l'email de vérification échoué pour %s : %s", user.email, e)
+    # L'envoi d'email passe par une tâche de fond : un SMTP lent ou injoignable ne doit
+    # jamais retarder ni faire échouer la réponse d'inscription elle-même.
+    user.verification_token = secrets.token_urlsafe(32)
+    user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
+    db.commit()
+    verify_link = f"{settings.app_url}/verify-email?token={user.verification_token}"
+    background_tasks.add_task(send_verification_email, user.email, user.full_name, verify_link)
 
     token = create_access_token(user.id, user.email)
     logger.info("[Auth] New user registered: %s (%s)", user.email, user.profile)
@@ -329,7 +326,7 @@ class ForgotPasswordRequest(BaseModel):
 
 
 @app.post("/auth/forgot-password", tags=["Auth"])
-def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(req: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Envoie un lien de réinitialisation par email si le compte existe."""
     user = get_user_by_email(db, req.email)
     if user:
@@ -337,10 +334,7 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
         user.reset_token_expires = datetime.utcnow() + timedelta(hours=RESET_TOKEN_HOURS)
         db.commit()
         reset_link = f"{settings.app_url}/reset-password?token={user.reset_token}"
-        try:
-            send_password_reset_email(user.email, user.full_name, reset_link)
-        except Exception as e:
-            logger.warning("[Auth] Envoi de l'email de réinitialisation échoué pour %s : %s", user.email, e)
+        background_tasks.add_task(send_password_reset_email, user.email, user.full_name, reset_link)
         logger.info("[Auth] Demande de réinitialisation : %s", user.email)
 
     # Réponse identique que le compte existe ou non — ne révèle jamais quels emails sont enregistrés.
@@ -385,22 +379,22 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 
 @app.post("/auth/resend-verification", tags=["Auth"])
 def resend_verification(
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Renvoie l'email de vérification pour le compte connecté."""
     if current_user.email_verified:
         return {"message": "Cet email est déjà vérifié.", "sent": False, "already_verified": True}
+    if not settings.smtp_host:
+        return {"message": "L'envoi d'emails n'est pas encore configuré côté serveur.", "sent": False, "already_verified": False}
+
     current_user.verification_token = secrets.token_urlsafe(32)
     current_user.verification_expires = datetime.utcnow() + timedelta(hours=VERIFICATION_TOKEN_HOURS)
     db.commit()
     verify_link = f"{settings.app_url}/verify-email?token={current_user.verification_token}"
-    sent = send_verification_email(current_user.email, current_user.full_name, verify_link)
-    return {
-        "message": "Email de vérification renvoyé." if sent else "L'envoi d'emails n'est pas encore configuré côté serveur.",
-        "sent": sent,
-        "already_verified": False,
-    }
+    background_tasks.add_task(send_verification_email, current_user.email, current_user.full_name, verify_link)
+    return {"message": "Email de vérification en cours d'envoi.", "sent": True, "already_verified": False}
 
 
 @app.get("/auth/quota", tags=["Auth"])
