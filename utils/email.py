@@ -3,11 +3,18 @@
 Si aucun SMTP n'est configuré (smtp_host vide), l'email n'est pas envoyé — le lien est
 seulement loggé. Ça permet au reste de l'app (inscription, reset) de fonctionner sans
 bloquer sur une dépendance externe non encore configurée.
+
+Resend passe par son API HTTP plutôt que par SMTP : sur Render, les connexions SMTP
+sortantes (port 587) échouaient systématiquement en timeout (confirmé en logs — pas un
+souci Resend, une restriction réseau côté hébergeur, fréquente sur les plateformes cloud
+gratuites). L'API HTTP utilise le port 443, jamais bloqué.
 """
 import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import httpx
 
 from config.settings import settings
 
@@ -15,11 +22,34 @@ logger = logging.getLogger(__name__)
 
 
 def send_email(to: str, subject: str, html_body: str) -> bool:
-    """Envoie un email HTML. Retourne True si envoyé, False si SMTP non configuré ou en échec."""
+    """Envoie un email HTML. Retourne True si envoyé, False si non configuré ou en échec."""
     if not settings.smtp_host:
-        logger.warning("[Email] SMTP non configuré — email à %s non envoyé (sujet: %s)", to, subject)
+        logger.warning("[Email] Email non configuré — email à %s non envoyé (sujet: %s)", to, subject)
         return False
 
+    if "resend.com" in settings.smtp_host:
+        return _send_via_resend_api(to, subject, html_body)
+    return _send_via_smtp(to, subject, html_body)
+
+
+def _send_via_resend_api(to: str, subject: str, html_body: str) -> bool:
+    try:
+        res = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.smtp_password}"},
+            json={"from": settings.smtp_from, "to": [to], "subject": subject, "html": html_body},
+            timeout=10,
+        )
+        res.raise_for_status()
+        logger.info("[Email] Envoyé via Resend à %s (sujet: %s)", to, subject)
+        return True
+    except httpx.HTTPError as e:
+        detail = e.response.text if isinstance(e, httpx.HTTPStatusError) else str(e)
+        logger.error("[Email] Échec d'envoi via Resend à %s : %s", to, detail)
+        return False
+
+
+def _send_via_smtp(to: str, subject: str, html_body: str) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = settings.smtp_from
@@ -32,10 +62,10 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)
             server.sendmail(settings.smtp_from, [to], msg.as_string())
-        logger.info("[Email] Envoyé à %s (sujet: %s)", to, subject)
+        logger.info("[Email] Envoyé via SMTP à %s (sujet: %s)", to, subject)
         return True
     except Exception as e:
-        logger.error("[Email] Échec d'envoi à %s : %s", to, e)
+        logger.error("[Email] Échec d'envoi via SMTP à %s : %s", to, e)
         return False
 
 
